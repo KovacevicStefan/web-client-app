@@ -6,15 +6,12 @@ on:
       - dev
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Test workflow
-        run: |
-          echo "GitHub Actions Workflow Triggered"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Commit: ${{ github.sha }}"
+      - name: Build Docker image
+        run: docker build -f dockerfile.prod -t web-client-app:prod .
