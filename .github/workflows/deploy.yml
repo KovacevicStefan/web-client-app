@@ -47,6 +47,16 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker load -i /home/$DEPLOY_USER/web-client-app.tar"
 
+      - name: Remove old container
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker rm -f web-client-app 2>/dev/null || true"
+
       - name: Run new Docker container
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -57,7 +67,7 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker run -d --name web-client-app -p 8080:80 web-client-app:prod"
 
-      - name: Test SSH connection
+      - name: Health check
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
@@ -65,4 +75,14 @@ jobs:
           ssh -i ~/.ssh/deploy_key \
             -o StrictHostKeyChecking=no \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "docker ps"
+            "curl --fail --retry 5 --retry-delay 2 http://localhost:8080"
+
+      - name: Cleanup Docker image archive
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "rm -f /home/$DEPLOY_USER/web-client-app.tar"
