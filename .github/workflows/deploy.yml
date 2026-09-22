@@ -47,6 +47,16 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker load -i /home/$DEPLOY_USER/web-client-app.tar"
 
+      - name: Run new Docker container
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker run -d --name web-client-app -p 8080:80 web-client-app:prod"
+
       - name: Test SSH connection
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
