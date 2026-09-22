@@ -16,6 +16,9 @@ jobs:
       - name: Build Docker image
         run: docker build -f dockerfile.prod -t web-client-app:prod .
 
+      - name: Save Docker image
+        run: docker save web-client-app:prod -o web-client-app.tar
+
       - name: Test SSH connection
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
