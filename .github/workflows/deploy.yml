@@ -86,6 +86,33 @@ jobs:
             -p 8080:80 \
             web-client-app:$IMAGE_TAG
 
+          echo "Container started."
+
+          echo "========== DEBUG: docker ps =========="
+          docker ps -a
+
+          echo "========== DEBUG: container status =========="
+          docker inspect web-client-app \
+            --format='Status: {{.State.Status}} | Running: {{.State.Running}} | StartedAt: {{.State.StartedAt}}'
+
+          echo "========== DEBUG: port mapping =========="
+          docker inspect web-client-app \
+            --format='{{.NetworkSettings.Ports}}'
+
+          echo "========== DEBUG: container logs =========="
+          docker logs web-client-app
+
+          echo "========== DEBUG: host port 8080 =========="
+          ss -lntp | grep ':8080' || true
+
+          echo "========== DEBUG: curl 127.0.0.1 =========="
+          curl -v http://127.0.0.1:8080 || true
+
+          echo "========== DEBUG: curl localhost =========="
+          curl -v http://localhost:8080 || true
+
+          echo "========== END DEBUG =========="
+
           echo "Waiting for application..."
 
           if curl --fail --retry 10 --retry-delay 2 --retry-connrefused http://localhost:8080; then
