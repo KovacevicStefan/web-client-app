@@ -88,7 +88,7 @@ jobs:
 
           echo "Waiting for application..."
 
-          if curl --fail --retry 5 --retry-delay 2 http://localhost:8080; then
+          if curl --fail --retry 10 --retry-delay 2 --retry-connrefused http://localhost:8080; then
             echo "Deployment successful."
           else
             echo "Health check failed."
@@ -104,7 +104,7 @@ jobs:
 
               echo "Rollback started."
 
-              if curl --fail --retry 5 --retry-delay 2 http://localhost:8080; then
+              if curl --fail --retry 10 --retry-delay 2 --retry-connrefused http://localhost:8080; then
                 echo "Rollback successful."
               else
                 echo "Rollback health check failed."
