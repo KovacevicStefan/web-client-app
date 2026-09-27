@@ -13,11 +13,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Set image version
+        run: echo "IMAGE_TAG=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
       - name: Build Docker image
-        run: docker build -f dockerfile.prod -t web-client-app:prod .
+        run: |
+          docker build \
+            -f dockerfile.prod \
+            -t web-client-app:${IMAGE_TAG} \
+            .
 
       - name: Save Docker image
-        run: docker save web-client-app:prod -o web-client-app.tar
+        run: |
+          docker save \
+            web-client-app:${IMAGE_TAG} \
+            -o web-client-app.tar
 
       - name: Setup SSH
         env:
@@ -47,42 +57,65 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker load -i /home/$DEPLOY_USER/web-client-app.tar"
 
-      - name: Remove old container
+      - name: Deploy and rollback if needed
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
         run: |
           ssh -i ~/.ssh/deploy_key \
             -o StrictHostKeyChecking=no \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "docker rm -f web-client-app 2>/dev/null || true"
+            "IMAGE_TAG=$IMAGE_TAG bash -s" <<'EOF'
 
-      - name: Run new Docker container
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh -i ~/.ssh/deploy_key \
-            -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            "docker run -d --name web-client-app -p 8080:80 web-client-app:prod"
+          set -e
 
-      - name: Health check
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh -i ~/.ssh/deploy_key \
-            -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            "curl --fail --retry 5 --retry-delay 2 http://localhost:8080"
+          CURRENT_IMAGE=$(docker inspect \
+            --format='{{.Config.Image}}' \
+            web-client-app 2>/dev/null || true)
 
-      - name: Cleanup Docker image archive
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh -i ~/.ssh/deploy_key \
-            -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            "rm -f /home/$DEPLOY_USER/web-client-app.tar"
+          echo "Current image: ${CURRENT_IMAGE:-none}"
+          echo "New image: web-client-app:$IMAGE_TAG"
+
+          if [ -n "$CURRENT_IMAGE" ]; then
+            docker rm -f web-client-app
+          fi
+
+          docker run -d \
+            --name web-client-app \
+            -p 8080:80 \
+            web-client-app:$IMAGE_TAG
+
+          echo "Waiting for application..."
+
+          if curl --fail --retry 5 --retry-delay 2 http://localhost:8080; then
+            echo "Deployment successful."
+          else
+            echo "Health check failed."
+            echo "Rolling back..."
+
+            docker rm -f web-client-app 2>/dev/null || true
+
+            if [ -n "$CURRENT_IMAGE" ]; then
+              docker run -d \
+                --name web-client-app \
+                -p 8080:80 \
+                "$CURRENT_IMAGE"
+
+              echo "Rollback started."
+
+              if curl --fail --retry 5 --retry-delay 2 http://localhost:8080; then
+                echo "Rollback successful."
+              else
+                echo "Rollback health check failed."
+                exit 1
+              fi
+            else
+              echo "No previous version available for rollback."
+              exit 1
+            fi
+          fi
+
+          rm -f /home/$DEPLOY_USER/web-client-app.tar
+
+          EOF
