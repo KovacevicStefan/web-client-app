@@ -9,6 +9,9 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
+    env:
+      IMAGE_NAME: web-client-app
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,129 +23,126 @@ jobs:
         run: |
           docker build \
             -f dockerfile.prod \
-            -t web-client-app:${IMAGE_TAG} \
+            -t ${IMAGE_NAME}:${IMAGE_TAG} \
             .
 
       - name: Save Docker image
         run: |
           docker save \
-            web-client-app:${IMAGE_TAG} \
-            -o web-client-app.tar
+            ${IMAGE_NAME}:${IMAGE_TAG} \
+            -o ${IMAGE_NAME}.tar
 
       - name: Setup SSH
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
 
-      - name: Transfer Docker image
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          scp -i ~/.ssh/deploy_key \
-            -o StrictHostKeyChecking=no \
-            web-client-app.tar \
-            "$DEPLOY_USER@$DEPLOY_HOST:/home/$DEPLOY_USER/web-client-app.tar"
-
-      - name: Load Docker image
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-        run: |
-          ssh -i ~/.ssh/deploy_key \
-            -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            "docker load -i /home/$DEPLOY_USER/web-client-app.tar"
-
-      - name: Deploy and rollback if needed
+      - name: Deploy to server
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
         run: |
-          ssh -i ~/.ssh/deploy_key \
+          scp \
+            -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=no \
+            ${IMAGE_NAME}.tar \
+            "$DEPLOY_USER@$DEPLOY_HOST:/home/$DEPLOY_USER/${IMAGE_NAME}.tar"
+
+          ssh \
+            -i ~/.ssh/deploy_key \
             -o StrictHostKeyChecking=no \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "IMAGE_TAG=$IMAGE_TAG bash -s" <<'EOF'
+            "IMAGE_NAME=$IMAGE_NAME IMAGE_TAG=$IMAGE_TAG DEPLOY_USER=$DEPLOY_USER bash -s" <<'EOF'
 
           set -e
 
+          IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+          ARCHIVE="/home/${DEPLOY_USER}/${IMAGE_NAME}.tar"
+
+          cleanup() {
+            rm -f "$ARCHIVE"
+          }
+
+          trap cleanup EXIT
+
+          echo "Loading image: $IMAGE"
+
+          docker load -i "$ARCHIVE"
+
           CURRENT_IMAGE=$(docker inspect \
             --format='{{.Config.Image}}' \
-            web-client-app 2>/dev/null || true)
+            "$IMAGE_NAME" 2>/dev/null || true)
 
           echo "Current image: ${CURRENT_IMAGE:-none}"
-          echo "New image: web-client-app:$IMAGE_TAG"
+          echo "New image: $IMAGE"
 
-          if [ -n "$CURRENT_IMAGE" ]; then
-            docker rm -f web-client-app
-          fi
+          echo "Stopping previous container..."
+
+          docker rm -f "$IMAGE_NAME" 2>/dev/null || true
+
+          echo "Starting new container..."
 
           docker run -d \
-            --name web-client-app \
+            --name "$IMAGE_NAME" \
             -p 8080:80 \
-            web-client-app:$IMAGE_TAG
-
-          echo "Container started."
-
-          echo "========== DEBUG: docker ps =========="
-          docker ps -a
-
-          echo "========== DEBUG: container status =========="
-          docker inspect web-client-app \
-            --format='Status: {{.State.Status}} | Running: {{.State.Running}} | StartedAt: {{.State.StartedAt}}'
-
-          echo "========== DEBUG: port mapping =========="
-          docker inspect web-client-app \
-            --format='{{.NetworkSettings.Ports}}'
-
-          echo "========== DEBUG: container logs =========="
-          docker logs web-client-app
-
-          echo "========== DEBUG: host port 8080 =========="
-          ss -lntp | grep ':8080' || true
-
-          echo "========== DEBUG: curl 127.0.0.1 =========="
-          curl -v http://127.0.0.1:8080 || true
-
-          echo "========== DEBUG: curl localhost =========="
-          curl -v http://localhost:8080 || true
-
-          echo "========== END DEBUG =========="
+            "$IMAGE"
 
           echo "Waiting for application..."
 
-          if curl --fail --retry 10 --retry-delay 2 --retry-connrefused http://localhost:8080; then
+          if curl \
+            --fail \
+            --retry 10 \
+            --retry-delay 2 \
+            --retry-connrefused \
+            http://localhost:8080; then
+
             echo "Deployment successful."
+
           else
+
             echo "Health check failed."
             echo "Rolling back..."
 
-            docker rm -f web-client-app 2>/dev/null || true
+            docker rm -f "$IMAGE_NAME" 2>/dev/null || true
 
             if [ -n "$CURRENT_IMAGE" ]; then
+
+              echo "Starting previous image: $CURRENT_IMAGE"
+
               docker run -d \
-                --name web-client-app \
+                --name "$IMAGE_NAME" \
                 -p 8080:80 \
                 "$CURRENT_IMAGE"
 
-              echo "Rollback started."
+              echo "Checking rollback..."
 
-              if curl --fail --retry 10 --retry-delay 2 --retry-connrefused http://localhost:8080; then
+              if curl \
+                --fail \
+                --retry 10 \
+                --retry-delay 2 \
+                --retry-connrefused \
+                http://localhost:8080; then
+
                 echo "Rollback successful."
+
               else
+
                 echo "Rollback health check failed."
                 exit 1
-              fi
-            else
-              echo "No previous version available for rollback."
-              exit 1
-            fi
-          fi
 
-          rm -f /home/$DEPLOY_USER/web-client-app.tar
+              fi
+
+            else
+
+              echo "No previous image available for rollback."
+              exit 1
+
+            fi
+
+          fi
 
           EOF
