@@ -23,14 +23,14 @@ jobs:
         run: |
           docker build \
             -f dockerfile.prod \
-            -t ${IMAGE_NAME}:${IMAGE_TAG} \
+            -t "${IMAGE_NAME}:${IMAGE_TAG}" \
             .
 
       - name: Save Docker image
         run: |
           docker save \
-            ${IMAGE_NAME}:${IMAGE_TAG} \
-            -o ${IMAGE_NAME}.tar
+            "${IMAGE_NAME}:${IMAGE_TAG}" \
+            -o "${IMAGE_NAME}.tar"
 
       - name: Setup SSH
         env:
@@ -49,7 +49,7 @@ jobs:
           scp \
             -i ~/.ssh/deploy_key \
             -o StrictHostKeyChecking=no \
-            ${IMAGE_NAME}.tar \
+            "${IMAGE_NAME}.tar" \
             "$DEPLOY_USER@$DEPLOY_HOST:/home/$DEPLOY_USER/${IMAGE_NAME}.tar"
 
           ssh \
@@ -68,6 +68,29 @@ jobs:
           }
 
           trap cleanup EXIT
+
+          wait_for_app() {
+            echo "Waiting for application..."
+
+            for i in {1..15}; do
+              if curl \
+                --silent \
+                --show-error \
+                --fail \
+                http://localhost:8080 \
+                > /dev/null; then
+
+                echo "Application is healthy."
+                return 0
+              fi
+
+              echo "Application is not ready yet. Attempt $i/15..."
+              sleep 2
+            done
+
+            echo "Application failed health check."
+            return 1
+          }
 
           echo "Loading image: $IMAGE"
 
@@ -91,58 +114,34 @@ jobs:
             -p 8080:80 \
             "$IMAGE"
 
-          echo "Waiting for application..."
-
-          if curl \
-            --fail \
-            --retry 10 \
-            --retry-delay 2 \
-            --retry-connrefused \
-            http://localhost:8080; then
-
+          if wait_for_app; then
             echo "Deployment successful."
-
-          else
-
-            echo "Health check failed."
-            echo "Rolling back..."
-
-            docker rm -f "$IMAGE_NAME" 2>/dev/null || true
-
-            if [ -n "$CURRENT_IMAGE" ]; then
-
-              echo "Starting previous image: $CURRENT_IMAGE"
-
-              docker run -d \
-                --name "$IMAGE_NAME" \
-                -p 8080:80 \
-                "$CURRENT_IMAGE"
-
-              echo "Checking rollback..."
-
-              if curl \
-                --fail \
-                --retry 10 \
-                --retry-delay 2 \
-                --retry-connrefused \
-                http://localhost:8080; then
-
-                echo "Rollback successful."
-
-              else
-
-                echo "Rollback health check failed."
-                exit 1
-
-              fi
-
-            else
-
-              echo "No previous image available for rollback."
-              exit 1
-
-            fi
-
+            exit 0
           fi
+
+          echo "Health check failed."
+          echo "Rolling back..."
+
+          docker rm -f "$IMAGE_NAME" 2>/dev/null || true
+
+          if [ -z "$CURRENT_IMAGE" ]; then
+            echo "No previous image available for rollback."
+            exit 1
+          fi
+
+          echo "Starting previous image: $CURRENT_IMAGE"
+
+          docker run -d \
+            --name "$IMAGE_NAME" \
+            -p 8080:80 \
+            "$CURRENT_IMAGE"
+
+          if wait_for_app; then
+            echo "Rollback successful."
+            exit 1
+          fi
+
+          echo "Rollback health check failed."
+          exit 1
 
           EOF
