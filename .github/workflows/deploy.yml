@@ -111,7 +111,7 @@ jobs:
 
           docker run -d \
             --name "$IMAGE_NAME" \
-            -p 8080:80 \
+            -p 127.0.0.1:8080:80 \
             "$IMAGE"
 
           if wait_for_app; then
@@ -133,7 +133,7 @@ jobs:
 
           docker run -d \
             --name "$IMAGE_NAME" \
-            -p 8080:80 \
+            -p 127.0.0.1:8080:80 \
             "$CURRENT_IMAGE"
 
           if wait_for_app; then
